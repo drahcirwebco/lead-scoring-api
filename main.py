@@ -1,4 +1,4 @@
-# main.py (Versão final com Webhooks, atualização de volta e filtro de Funil)
+# main.py (Versão final com Webhooks, filtro de Funil e endpoint de depuração)
 
 import pandas as pd
 import joblib
@@ -24,15 +24,20 @@ WEBHOOK_PASSWORD = os.getenv('WEBHOOK_PASSWORD')
 TARGET_PIPELINE_ID = 1
 
 # Inicializar FastAPI e Segurança
-app = FastAPI(title="API de Lead Scoring em Tempo Real", version="2.1.0")
+app = FastAPI(title="API de Lead Scoring em Tempo Real", version="2.2.0-debug")
 security = HTTPBasic()
 
 # --- Função de Segurança para o Webhook ---
 def verify_credentials(credentials: HTTPBasicCredentials = Depends(security)):
     """Verifica se as credenciais enviadas pelo webhook são válidas."""
+    # Garante que as variáveis não sejam nulas antes de comparar
+    stored_username = WEBHOOK_USER or ""
+    stored_password = WEBHOOK_PASSWORD or ""
+    
     # Usar 'secrets.compare_digest' para previnir ataques de "timing"
-    is_user_correct = secrets.compare_digest(credentials.username, WEBHOOK_USER or "")
-    is_pass_correct = secrets.compare_digest(credentials.password, WEBHOOK_PASSWORD or "")
+    is_user_correct = secrets.compare_digest(credentials.username, stored_username)
+    is_pass_correct = secrets.compare_digest(credentials.password, stored_password)
+    
     if not (is_user_correct and is_pass_correct):
         raise HTTPException(status_code=401, detail="Credenciais inválidas")
     return True
@@ -75,9 +80,6 @@ def update_pipedrive_deal(deal_id: int, score: float):
 @app.post("/webhook/pipedrive")
 async def pipedrive_webhook(request: Request, authenticated: bool = Depends(verify_credentials)):
     """Recebe notificações do Pipedrive, filtra pelo funil correto, calcula o score e atualiza o negócio."""
-    if not authenticated:
-        return {"status": "error", "message": "Autenticação falhou."}
-
     webhook_data = await request.json()
     deal_info = webhook_data.get("current", {})
     deal_id = deal_info.get("id")
@@ -86,14 +88,12 @@ async def pipedrive_webhook(request: Request, authenticated: bool = Depends(veri
     if not deal_id:
         return {"status": "ok", "message": "Evento sem ID de negócio, ignorado."}
 
-    # >>>>> VERIFICAÇÃO CRUCIAL DO FUNIL <<<<<
     if pipeline_id != TARGET_PIPELINE_ID:
         print(f"Negócio {deal_id} está no funil {pipeline_id}, não no funil alvo {TARGET_PIPELINE_ID}. Ignorando.")
         return {"status": "ok", "message": f"Negócio ignorado (funil {pipeline_id})."}
 
     print(f"Negócio {deal_id} recebido do funil alvo. Processando...")
 
-    # Mapeia os dados do Pipedrive para o formato que nosso modelo espera
     deal_for_model = {
         "valor": deal_info.get("value", 0) or 0,
         "utm_source": deal_info.get("utm_source", "desconhecido"),
@@ -112,3 +112,25 @@ async def pipedrive_webhook(request: Request, authenticated: bool = Depends(veri
 @app.get("/")
 def read_root():
     return {"status": "ok", "message": "API de Lead Scoring em Tempo Real está no ar!"}
+
+
+# ==========================================================
+#           >> ENDPOINT DE DEPURAÇÃO TEMPORÁRIO <<
+# ==========================================================
+# Use este endpoint para verificar se as variáveis de ambiente estão sendo lidas.
+# Acesse via curl: curl -u "user:pass" https://sua-api.onrender.com/debug/vars
+# Remova este endpoint quando o problema for resolvido.
+
+@app.get("/debug/vars")
+def debug_vars(authenticated: bool = Depends(verify_credentials)):
+    # Esta função só será executada se a autenticação passar
+    return {
+        "message": "Autenticação BEM-SUCEDIDA! As variáveis de ambiente foram lidas:",
+        "pipedrive_api_key_loaded": "Sim" if PIPEDRIVE_API_KEY else "NÃO",
+        "lead_score_field_key_loaded": "Sim" if LEAD_SCORE_FIELD_KEY else "NÃO",
+        "webhook_user_loaded": "Sim" if WEBHOOK_USER else "NÃO",
+        "webhook_user_value_preview": WEBHOOK_USER[:2] + '...' if WEBHOOK_USER else "Nulo",
+        "webhook_password_loaded": "Sim" if WEBHOOK_PASSWORD else "NÃO",
+        "webhook_password_value_preview": WEBHOOK_PASSWORD[:2] + '...' if WEBHOOK_PASSWORD else "Nulo",
+    }
+# ==========================================================
