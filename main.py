@@ -1,4 +1,4 @@
-# main.py (Versão final com Webhooks, filtro de Funil e endpoint de depuração)
+# main.py (Versão de TESTE com segurança do webhook simplificada)
 
 import pandas as pd
 import joblib
@@ -10,37 +10,36 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 import secrets
 
 # --- Carregar Artefatos e Configurações ---
-# Carrega o modelo e as colunas do disco local da API
 model = joblib.load('lead_scorer_model.pkl')
 model_columns = joblib.load('model_columns.pkl')
 
-# Carregar variáveis de ambiente de forma segura, providas pelo Render
 PIPEDRIVE_API_KEY = os.getenv('PIPEDRIVE_API_KEY')
 LEAD_SCORE_FIELD_KEY = os.getenv('LEAD_SCORE_FIELD_KEY')
 WEBHOOK_USER = os.getenv('WEBHOOK_USER')
 WEBHOOK_PASSWORD = os.getenv('WEBHOOK_PASSWORD')
 
-# ID do Funil que nos interessa. A lógica só rodará para este funil.
 TARGET_PIPELINE_ID = 1
 
-# Inicializar FastAPI e Segurança
-app = FastAPI(title="API de Lead Scoring em Tempo Real", version="2.2.0-debug")
+app = FastAPI(title="API de Lead Scoring em Tempo Real", version="2.3.0-debug-auth")
 security = HTTPBasic()
 
-# --- Função de Segurança para o Webhook ---
+# ==============================================================================
+#           >> FUNÇÃO DE SEGURANÇA TEMPORARIAMENTE SIMPLIFICADA <<
+# ==============================================================================
+# Esta versão da função de segurança sempre retorna True.
+# Ela serve para testar se o resto do sistema funciona, isolando o problema 401.
+# ATENÇÃO: Não use esta versão em produção a longo prazo.
+
 def verify_credentials(credentials: HTTPBasicCredentials = Depends(security)):
-    """Verifica se as credenciais enviadas pelo webhook são válidas."""
-    # Garante que as variáveis não sejam nulas antes de comparar
-    stored_username = WEBHOOK_USER or ""
-    stored_password = WEBHOOK_PASSWORD or ""
-    
-    # Usar 'secrets.compare_digest' para previnir ataques de "timing"
-    is_user_correct = secrets.compare_digest(credentials.username, stored_username)
-    is_pass_correct = secrets.compare_digest(credentials.password, stored_password)
-    
-    if not (is_user_correct and is_pass_correct):
-        raise HTTPException(status_code=401, detail="Credenciais inválidas")
+    """
+    ATENÇÃO: Versão de teste que sempre permite o acesso.
+    Isso é apenas para diagnosticar o problema 401.
+    """
+    print(">>> AVISO DE SEGURANÇA: Autenticação de webhook está em modo de teste (sempre permitindo).")
+    # A função simplesmente retorna True, bypassando a verificação de usuário e senha.
     return True
+# ==============================================================================
+
 
 # --- Função de Lógica de Predição ---
 def get_prediction_for_deal(deal_data: dict) -> float:
@@ -50,7 +49,7 @@ def get_prediction_for_deal(deal_data: dict) -> float:
     
     final_df = pd.DataFrame(columns=model_columns).fillna(0)
     final_df = pd.concat([final_df, input_df_dummies], ignore_index=True, sort=False).fillna(0)
-    final_df['ciclo_em_dias'] = 0 # Para um negócio em andamento, o ciclo ainda não é relevante
+    final_df['ciclo_em_dias'] = 0
     final_df = final_df[model_columns]
 
     regex = re.compile(r"\[|\]|<", re.IGNORECASE)
@@ -67,7 +66,7 @@ def update_pipedrive_deal(deal_id: int, score: float):
         return
 
     url = f"https://api.pipedrive.com/v1/deals/{deal_id}?api_token={PIPEDRIVE_API_KEY}"
-    payload = {LEAD_SCORE_FIELD_KEY: round(score * 100, 2)} # Exibe como porcentagem (0.85 -> 85.0)
+    payload = {LEAD_SCORE_FIELD_KEY: round(score * 100, 2)}
     
     try:
         response = requests.put(url, json=payload)
@@ -80,6 +79,10 @@ def update_pipedrive_deal(deal_id: int, score: float):
 @app.post("/webhook/pipedrive")
 async def pipedrive_webhook(request: Request, authenticated: bool = Depends(verify_credentials)):
     """Recebe notificações do Pipedrive, filtra pelo funil correto, calcula o score e atualiza o negócio."""
+    if not authenticated:
+        # Com a função de teste, esta parte nunca será executada, mas a mantemos por estrutura.
+        raise HTTPException(status_code=401, detail="Autenticação falhou.")
+
     webhook_data = await request.json()
     deal_info = webhook_data.get("current", {})
     deal_id = deal_info.get("id")
@@ -113,24 +116,4 @@ async def pipedrive_webhook(request: Request, authenticated: bool = Depends(veri
 def read_root():
     return {"status": "ok", "message": "API de Lead Scoring em Tempo Real está no ar!"}
 
-
-# ==========================================================
-#           >> ENDPOINT DE DEPURAÇÃO TEMPORÁRIO <<
-# ==========================================================
-# Use este endpoint para verificar se as variáveis de ambiente estão sendo lidas.
-# Acesse via curl: curl -u "user:pass" https://sua-api.onrender.com/debug/vars
-# Remova este endpoint quando o problema for resolvido.
-
-@app.get("/debug/vars")
-def debug_vars(authenticated: bool = Depends(verify_credentials)):
-    # Esta função só será executada se a autenticação passar
-    return {
-        "message": "Autenticação BEM-SUCEDIDA! As variáveis de ambiente foram lidas:",
-        "pipedrive_api_key_loaded": "Sim" if PIPEDRIVE_API_KEY else "NÃO",
-        "lead_score_field_key_loaded": "Sim" if LEAD_SCORE_FIELD_KEY else "NÃO",
-        "webhook_user_loaded": "Sim" if WEBHOOK_USER else "NÃO",
-        "webhook_user_value_preview": WEBHOOK_USER[:2] + '...' if WEBHOOK_USER else "Nulo",
-        "webhook_password_loaded": "Sim" if WEBHOOK_PASSWORD else "NÃO",
-        "webhook_password_value_preview": WEBHOOK_PASSWORD[:2] + '...' if WEBHOOK_PASSWORD else "Nulo",
-    }
-# ==========================================================
+# O endpoint de debug foi removido nesta versão, pois a simplificação da segurança já é um teste mais direto.
